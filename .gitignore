@@ -6,3 +6,8 @@ venv/
 .ipynb_checkpoints/
 .DS_Store
 *.egg-info/
+*.log
+
+# Keep the committed Smart_Blade_Validated showcase; ignore other local runs.
+Outputs/*
+!Outputs/Smart_Blade_Validated/
