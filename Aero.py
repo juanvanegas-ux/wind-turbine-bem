@@ -23,17 +23,16 @@ class Aero:
         ----------
         geometry                     : BladeGeometry
         polar_files                  : dict  airfoil_name -> polar source.
-                                             The value is EITHER
+                                             the value is either
                                                * a single file path (str), the
-                                                 Reynolds-agnostic case (current
-                                                 default behaviour), OR
-                                               * a dict {Re: file_path} giving
+                                                 Reynolds agnostic case (this is
+                                                 the usual one), OR
+                                               * a dict {Re: file_path} with
                                                  several polars for the same
                                                  airfoil at different Reynolds
-                                                 numbers (F6). When >1 Re is
-                                                 supplied the coefficient lookup
-                                                 interpolates on the local
-                                                 section Reynolds number.
+                                                 numbers. with more than one Re
+                                                 the lookup interpolates on the
+                                                 local section Reynolds number.
         extrapolate_360              : bool  run Viterna extrapolation
         step_deg                     : float polar resolution [deg]
         apply_rotational_correction  : bool  apply Du-Selig per-section correction
@@ -45,8 +44,8 @@ class Aero:
         kinematic_viscosity          : float air kinematic viscosity nu [m^2/s]
                                              used to form the local section
                                              Reynolds number Re = W c / nu when
-                                             Re-dependent polars are supplied
-                                             (F6). Unused for single-Re inputs.
+                                             Re dependent polars are given. not
+                                             used for single Re inputs.
         """
         self.geometry                    = geometry
         self.polar_files                 = polar_files
@@ -64,10 +63,9 @@ class Aero:
         self.polars_corrected_reference = {}  # per-airfoil comparison polars
         self.polars_corrected = {}       # per-section corrected polars
         self.section_polar_map = {}
-        # F6: Re-indexed 360 polars. polars_by_re[name] = list of (Re, df)
-        # sorted by ascending Re. For single-Re airfoils the list has one entry
-        # and Re is None; the lookup then ignores Reynolds entirely (bit-for-bit
-        # identical to the pre-F6 single-polar path).
+        # Re indexed 360 polars. polars_by_re[name] = list of (Re, df) sorted by
+        # ascending Re. for single Re airfoils there is just one entry and the
+        # lookup ignores Reynolds completely.
         self.polars_by_re = {}
         self.rotational_correction_diagnostics = []
         self.rotational_correction_applied = False
@@ -80,10 +78,10 @@ class Aero:
 
     @property
     def reynolds_dependent(self):
-        """True if any airfoil carries more than one Reynolds-number polar.
+        """True if any airfoil has more than one Reynolds number polar.
 
-        When False (the single-Re default), callers should pass ``Re=None`` to
-        the coefficient lookups and the result is identical to the pre-F6 code.
+        when it is False (the single Re default) callers should just pass
+        Re=None to the lookups.
         """
         return any(len(v) > 1 for v in self.polars_by_re.values())
 
@@ -112,9 +110,9 @@ class Aero:
     def load_polars(self):
         for airfoil_name, source in self.polar_files.items():
             if isinstance(source, dict):
-                # F6: Re-keyed polars {Re: path}. Build a Re-sorted table and
-                # use the lowest-Re polar as the representative single-Re polar
-                # for the legacy (Re-agnostic) attributes and code paths.
+                # Re keyed polars {Re: path}. sort them by Re and use the lowest
+                # Re polar as the representative single Re one for the old
+                # Re agnostic attributes.
                 re_items = sorted(source.items(), key=lambda kv: float(kv[0]))
                 by_re = []
                 for re_val, path in re_items:
@@ -411,7 +409,7 @@ class Aero:
                 self.section_polar_map[idx] = self.polars_uncorrected_360[airfoil_name]
                 continue
 
-            # Estimate zero-lift angle from the linear region [-10°, 5°]
+            # estimate the zero lift angle from the linear region [-10, 5] deg
             # using only the monotone portion to avoid np.interp issues
             measured = self.polars_raw[airfoil_name]
             mask = (measured["alpha"] >= -10.0) & (measured["alpha"] <= 5.0)
@@ -482,18 +480,15 @@ class Aero:
         """
         Return (Cl, Cd) for a given airfoil name and angle of attack.
 
-        If rotational correction is active and section_idx is provided,
-        the pre-built per-section corrected polar is used (O(1) lookup).
+        if rotational correction is on and section_idx is given, the
+        pre built per section corrected polar is used (O(1) lookup).
 
-        F6 (Reynolds dependence)
-        ------------------------
-        When the airfoil carries more than one Reynolds-number polar AND a
-        local ``Re`` is supplied, (Cl, Cd) are interpolated on Reynolds number
-        between the two bracketing polars (Re clamped to the tabulated range, so
-        extrapolation never occurs). For single-Re airfoils, or when ``Re`` is
-        None, this is bit-for-bit the original single-polar lookup. The
-        rotational-correction branch is unchanged and Re-agnostic (its corrected
-        polars are single-Re by construction).
+        Reynolds dependence: when the airfoil has more than one Reynolds polar
+        AND a local Re is given, (Cl, Cd) get interpolated on Re between the two
+        bracketing polars (Re clamped to the table range, so it never
+        extrapolates). for single Re airfoils, or when Re is None, it is just the
+        plain single polar lookup. the rotational correction branch does not care
+        about Re (its corrected polars are single Re anyway).
         """
         if (
             self.apply_rotational_correction
@@ -520,12 +515,11 @@ class Aero:
         return Cl, Cd
 
     def _interp_polar_reynolds(self, re_table, alpha_deg, Re):
-        """Interpolate (Cl, Cd) on Reynolds number across a Re-sorted table.
+        """Interpolate (Cl, Cd) on Reynolds number across a Re sorted table.
 
-        ``re_table`` is a list of (Re_value, polar_df) sorted by ascending Re.
-        Re is clamped to [Re_min, Re_max] (no extrapolation). At each bracketing
-        Re the polar is first interpolated on alpha, then the two results are
-        linearly blended on Re.
+        re_table is a list of (Re_value, polar_df) sorted by ascending Re. Re is
+        clamped to [Re_min, Re_max] so we never extrapolate. at each bracketing
+        Re i interpolate the polar on alpha first, then blend the two on Re.
         """
         res = [rv for rv, _ in re_table]
         Re_lo, Re_hi = res[0], res[-1]
@@ -552,19 +546,17 @@ class Aero:
         Return (Cl, Cd) at a given radial position with smooth blending
         across airfoil transitions.
 
-        F6: an optional local Reynolds number ``Re`` is threaded through to the
-        per-airfoil lookups; it only changes the result for airfoils that carry
-        multiple Re polars (otherwise it is ignored, preserving the single-Re
-        behaviour exactly).
+        an optional local Reynolds number Re is passed down to the per airfoil
+        lookups. it only matters for airfoils with several Re polars, otherwise
+        it is ignored.
 
-        The geometry CSV declares one airfoil per station (e.g. cylinder
-        until r=0.5, S823 from 0.5-1.5, S822 beyond), which produces a
-        step-function airfoil assignment.  To avoid sharp jumps in the
-        radial force distribution, this method blends between adjacent
-        named airfoils over a transition zone of half-width
-        `blend_half_width` (default 5% of R) centred on each name
-        boundary.  Inside the transition zone the weighting follows a
-        smooth cosine ramp (0 at one end, 1 at the other).
+        the geometry CSV gives one airfoil per station (e.g. cylinder until
+        r=0.5, S823 from 0.5 to 1.5, S822 beyond), so the airfoil assignment is a
+        step function. to avoid sharp jumps in the radial force distribution this
+        method blends between neighbouring named airfoils over a transition zone
+        of half width blend_half_width (default 5% of R) centred on each
+        boundary. inside that zone the weight follows a smooth cosine ramp (0 at
+        one end, 1 at the other).
 
         Outside the transition zone the section uses purely the named
         airfoil (no blending overhead).

@@ -4,23 +4,24 @@ import pandas as pd
 
 class WindTurbineController:
     """
-    Variable-speed, pitch-to-feather wind turbine controller.
+    Variable speed, pitch to feather wind turbine controller.
 
-    Operating regions
-    -----------------
-    Region 1 — MPPT  (V_cut_in ≤ V ≤ V_transition):
-        Track optimal tip-speed ratio λ_design at fixed pitch β_design.
-        Rotor speed rises with wind to keep λ constant → maximum Cp.
+    three operating regions:
 
-    Region 2 — Rated speed  (V_transition < V ≤ V_rated):
-        RPM is capped at rpm_max.  Pitch stays at β_design.
-        Power continues to rise (Cp drops slightly as λ falls below optimum).
+    Region 1, MPPT  (V_cut_in <= V <= V_transition):
+        track the optimal tip speed ratio lambda_design at fixed pitch
+        beta_design. rotor speed climbs with the wind to keep lambda constant,
+        which gives max Cp.
 
-    Region 3 — Rated power  (V > V_rated):
-        RPM fixed at rpm_max.  Pitch feathers to hold P = P_rated.
+    Region 2, rated speed  (V_transition < V <= V_rated):
+        rpm is capped at rpm_max, pitch stays at beta_design. power keeps rising
+        (Cp drops a little as lambda falls below optimum).
 
-    V_transition is computed automatically as the wind speed at which
-    MPPT tracking would first exceed rpm_max.
+    Region 3, rated power  (V > V_rated):
+        rpm fixed at rpm_max, pitch feathers to hold P = P_rated.
+
+    V_transition is worked out automatically as the wind speed where MPPT
+    tracking would first go past rpm_max.
 
     Parameters
     ----------
@@ -32,7 +33,7 @@ class WindTurbineController:
     v_cut_in      : float   cut-in wind speed [m/s]
     v_cut_out     : float   cut-out wind speed [m/s]
     rpm_max       : float   maximum rotor speed [rpm]  (default: unlimited)
-    beta_max_deg  : float   maximum feather pitch [deg]  (default: 35°)
+    beta_max_deg  : float   maximum feather pitch [deg]  (default: 35)
     feather_tol   : float   bisection tolerance as fraction of P_rated
     """
 
@@ -61,7 +62,7 @@ class WindTurbineController:
         self.feather_tol   = feather_tol
         self.pitch_control = pitch_control   # False = passive-stall regulation
 
-        # RPM cap — if None, no cap applied (free MPPT all the way to rated)
+        # rpm cap. if None there is no cap (free MPPT all the way to rated)
         if rpm_max is not None:
             self.omega_max = rpm_max * 2.0 * np.pi / 60.0
             self.rpm_max   = rpm_max
@@ -98,8 +99,8 @@ class WindTurbineController:
         Return (omega [rad/s], pitch [deg]) for a given wind speed.
         Returns None for wind speeds outside the operating envelope.
 
-        Region 1 (V ≤ V_transition): MPPT — lambda = lambda_design
-        Region 2 (V_transition < V ≤ V_rated): RPM capped, pitch fixed
+        Region 1 (V <= V_transition): MPPT, lambda = lambda_design
+        Region 2 (V_transition < V <= V_rated): rpm capped, pitch fixed
         Region 3 (V > V_rated):
             - if pitch_control=True:  RPM capped, pitch feathers to P_rated
             - if pitch_control=False: RPM capped, pitch stays at design
@@ -109,7 +110,7 @@ class WindTurbineController:
             return None
 
         if v <= self.v_transition:
-            # Region 1: MPPT — track optimal lambda
+            # Region 1: MPPT, track optimal lambda
             omega     = self.lambda_design * v / self.R
             pitch_deg = self.pitch_design
 
@@ -132,8 +133,8 @@ class WindTurbineController:
 
     def _feather_pitch(self, v):
         """
-        Bisection search for pitch β ∈ [β_design, β_max] such that
-        P(v, ω_rated, β) ≈ P_rated.
+        bisection on the pitch beta in [beta_design, beta_max] so that
+        P(v, omega_rated, beta) is about P_rated.
         """
         omega = self.omega_rated
         tol   = self.feather_tol * self.p_rated
@@ -152,7 +153,7 @@ class WindTurbineController:
         if p_lo <= self.p_rated:
             return self.pitch_design   # no pitching needed
         if p_hi >= self.p_rated:
-            return self.beta_max_deg   # saturated — feather fully
+            return self.beta_max_deg   # saturated, feather fully
 
         lo, hi = self.pitch_design, self.beta_max_deg
         for _ in range(40):
@@ -180,8 +181,8 @@ class WindTurbineController:
 
         Parameters
         ----------
-        wind_speeds          : array-like   — wind speeds [m/s]
-        convergence_check_fn : callable     — optional, takes a BEM result
+        wind_speeds          : array-like   wind speeds [m/s]
+        convergence_check_fn : callable     optional, takes a BEM result
                                              dict, returns number of
                                              non-converged sections
 
@@ -234,8 +235,8 @@ class WindTurbineController:
         DataFrame (must have 'v_inf' and 'power_W' columns) and a Weibull
         wind speed distribution.
 
-        Uses trapezoidal integration:
-            AEP = 8760 · ∫ P(V) · f(V) dV
+        trapezoidal integration of:
+            AEP = 8760 * integral of P(V) * f(V) dV
 
         where f(V) is the Weibull PDF.
         """
@@ -256,8 +257,8 @@ class WindTurbineController:
         return (
             f"WindTurbineController("
             f"{mode}, "
-            f"λ={self.lambda_design:.2f}, "
-            f"β={self.pitch_design:.1f}°, "
+            f"lambda={self.lambda_design:.2f}, "
+            f"beta={self.pitch_design:.1f}deg, "
             f"RPM_max={self.rpm_max:.1f}, "
             f"V_transition={self.v_transition:.1f} m/s, "
             f"V_rated={self.v_rated} m/s, "

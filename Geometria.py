@@ -64,8 +64,8 @@ class BladeGeometry:
         self.r = r_new
         self.chord = chord_new
         self.twist = twist_new
-        # self.airfoil deliberately not regridded —
-        # use self.airfoil_r and self.airfoil_names for blending lookups
+        # self.airfoil is left alone on purpose, not regridded.
+        # use self.airfoil_r and self.airfoil_names for the blending lookups
 
 
     def get_section(self, i):

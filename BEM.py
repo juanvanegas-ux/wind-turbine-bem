@@ -34,11 +34,11 @@ class BEMSolver:
         self.debug = debug
         self.record_iteration_history = record_iteration_history
 
-        # F8: section-solve strategy.
-        #   "picard" : multi-start fixed-point iteration (default; unchanged).
-        #   "ning"   : Ning (2014) single-residual-in-phi solve with bracketed
-        #              Brent root finding (guaranteed convergence once a sign-
-        #              changing bracket is found). Opt-in.
+        # which section solver to use:
+        #   "picard" : multi start fixed point iteration (the default one)
+        #   "ning"   : Ning (2014) single residual in phi, solved with a
+        #              bracketed Brent. converges no matter what once we have a
+        #              sign change in the bracket. use it for stalled blades.
         if solver_method not in ("picard", "ning"):
             raise ValueError(
                 f"solver_method must be 'picard' or 'ning', got {solver_method!r}"
@@ -68,27 +68,20 @@ class BEMSolver:
         )
 
     def solve_section(self, r, chord, twist, V_inf, omega, pitch=0.0, section_idx=None):
-        # ------------------------------------------------------------------
-        # Multi-start strategy: try two initial guesses and keep the one
-        # with the lower residual at the end.
+        # try two starting guesses and keep the one with the lower residual.
         #
-        # Why this is necessary:
-        #   The BEM fixed-point iteration has two stable branches in the
-        #   Glauert regime.  The physical solution has small a (~0.1-0.3).
-        #   The spurious solution has a clamped at a_max (~0.95), which
-        #   makes phi→0, alpha→negative, Cl→0, and the iteration falsely
-        #   "converges" because consecutive clamped values are identical
-        #   (|a_new - a_old| = 0 < tol).
+        # the reason i do this: in the Glauert regime the fixed point has two
+        # stable branches. the real one has small a (around 0.1 to 0.3). the
+        # fake one sits clamped at a_max (~0.95), which pushes phi to 0, alpha
+        # negative, Cl to 0, and then the iteration "converges" for free because
+        # two clamped values in a row are identical (|a_new - a_old| = 0 < tol).
         #
-        #   Starts:
-        #     - a = 0.0  (always safe; walks UP to the physical solution)
-        #     - a = 1/3  (Betz value; good for well-loaded sections at low TSR)
+        # the two starts:
+        #     a = 0.0  always safe, walks up to the physical solution
+        #     a = 1/3  Betz value, good for loaded sections at low TSR
         #
-        #   The winner is the solution whose final residual
-        #   |a_new(a_final) - a_final| is smallest.  A clamped solution
-        #   has residual = |raw_a - a_max|, which is large when the
-        #   unclamped iterate differs from the cap.
-        # ------------------------------------------------------------------
+        # winner is whoever has the smallest final residual |a_new - a_final|.
+        # a clamped solution has a big residual, a real one has ~0.
 
         a_max = self.corrections.a_max  # typically 0.95
 
@@ -110,8 +103,8 @@ class BEMSolver:
                 phi          = np.arctan2(V_axial, V_tangential)
                 alpha        = phi - twist - pitch
 
-                # F6: local Reynolds from the current iterate's relative
-                # velocity (None unless multi-Re polars are loaded).
+                # local Reynolds from the current relative velocity (stays None
+                # unless we actually loaded several polars per airfoil)
                 Re_local = self._section_reynolds(V_axial, V_tangential, chord)
                 Cl, Cd = self.aero.get_blended_coefficients(
                     r, np.degrees(alpha), section_idx=section_idx, Re=Re_local)
@@ -128,12 +121,11 @@ class BEMSolver:
                 )
                 last_corr      = corr_info
 
-                # True fixed-point residual: the distance the *unrelaxed*
-                # update would move, |a_raw - a_old|.  The relaxed step
-                # |a - a_old| equals relaxation * |a_raw - a_old|, so testing
-                # it makes the effective tolerance scale with the relaxation
-                # factor and a heavily relaxed iteration can satisfy the
-                # tolerance without the fixed point being resolved.
+                # true residual is how far the unrelaxed update would move,
+                # |a_raw - a_old|. if i test the relaxed step |a - a_old| instead
+                # it equals relaxation * |a_raw - a_old|, so a heavily relaxed run
+                # could pass the tolerance without the fixed point being solved.
+                # so test the raw one.
                 a_raw_it  = corr_info.get("a_raw", a)
                 ap_raw_it = corr_info.get("a_prime_raw", a_prime)
                 delta_a  = abs(a_raw_it  - a_old)
@@ -178,10 +170,9 @@ class BEMSolver:
                         "a_buhl": corr_info.get("a_buhl", np.nan),
                     })
 
-                # BUG FIX 1 — reject false convergence caused by the a_max
-                # clamp.  When a is pinned at the cap, consecutive iterates
-                # are identical, satisfying the tol test trivially.
-                # Only accept convergence if a is not against the ceiling.
+                # dont let the a_max clamp fake a convergence. when a is pinned
+                # at the cap two iterates are equal and pass the tol test for
+                # nothing, so only accept it if a is not sitting on the ceiling.
                 at_cap = (a >= a_max - 1e-6)
 
                 if delta_a < self.tol and delta_ap < self.tol and not at_cap:
@@ -198,24 +189,23 @@ class BEMSolver:
             return a, a_prime, converged, last_corr, residual, iteration_history
 
         if self.solver_method == "ning":
-            # F8 — Ning (2014) bracketed phi-residual solve. Reuses the same
-            # corrections (axial/tangential induction, drag toggle, smooth_blend
-            # high-thrust) as Picard, so it solves identical equations but with
-            # guaranteed convergence on heavily loaded sections.
+            # Ning (2014) bracketed phi residual solve. it reuses the same
+            # corrections as Picard (axial/tangential induction, drag toggle,
+            # smooth_blend high thrust), so same equations, but it always
+            # converges on heavily loaded sections.
             (best_a, best_ap, converged,
              last_corr_info, best_history) = self._ning_solve(
                 r, chord, twist, V_inf, omega, pitch, section_idx)
         else:
-            # BUG FIX 2 — always start from a=0 as well as from the Betz
-            # guess.  a=0 cannot be attracted to the high-a spurious branch.
+            # always start from a=0 too, not only from the Betz guess. a=0 cant
+            # get pulled into the fake high-a branch.
             best_a, best_ap, converged, last_corr_info, best_res, best_history = _run_from(
                 0.0, "a0"
             )
             a2, ap2, conv2, corr2, res2, hist2 = _run_from(1.0 / 3.0, "a_one_third")
 
-            # Keep whichever start gave the smaller final residual.
-            # In practice the a=0 start wins at high TSR / low loading.
-            # The 1/3 start wins at low TSR (stalled root sections).
+            # keep the start with the smaller residual. in practice a=0 wins at
+            # high TSR / light loading, and 1/3 wins at low TSR (stalled root).
             if res2 < best_res:
                 best_a, best_ap, converged, last_corr_info = a2, ap2, conv2, corr2
                 best_history = hist2
@@ -247,8 +237,8 @@ class BEMSolver:
         alpha        = phi - twist - pitch
         alpha_deg    = np.degrees(alpha)
 
-        # F6: local Reynolds from the converged relative velocity (None unless
-        # multi-Re polars are loaded -> identical to the pre-F6 lookup).
+        # local Reynolds from the converged relative velocity (None unless
+        # multi Re polars are loaded)
         Re_local = self._section_reynolds(V_axial, V_tangential, chord)
         Cl, Cd = self.aero.get_blended_coefficients(
             r, alpha_deg, section_idx=section_idx, Re=Re_local)
@@ -334,13 +324,12 @@ class BEMSolver:
         }
 
     def _section_reynolds(self, V_axial, V_tangential, chord):
-        """Local section Reynolds number for F6 Re-dependent polars, or None.
+        """Local section Reynolds number for Re dependent polars, or None.
 
-        Returns ``None`` -- i.e. no Reynolds threading and no behaviour change --
-        unless the aero layer actually carries multi-Re polars. This keeps the
-        single-Re default bit-for-bit identical and avoids the hypot/division
-        overhead in the common case. When active, Re = W c / nu with
-        W = |(V_axial, V_tangential)| the local relative velocity.
+        returns None (so nothing changes) unless the aero layer is actually
+        carrying multi Re polars. that way the normal single Re case skips the
+        hypot/division. when it is active Re = W c / nu, with W the local
+        relative velocity |(V_axial, V_tangential)|.
         """
         if not getattr(self.aero, "reynolds_dependent", False):
             return None
@@ -348,24 +337,23 @@ class BEMSolver:
         return self.aero.local_reynolds(W, chord)
 
     def _ning_solve(self, r, chord, twist, V_inf, omega, pitch, section_idx):
-        """Ning (2014) bracketed phi-residual section solve (F8).
+        """Ning (2014) bracketed phi residual section solve.
 
-        Reformulates the coupled (a, a') fixed-point problem as a single
-        residual in the inflow angle phi:
+        turns the coupled (a, a') fixed point into a single residual in the
+        inflow angle phi:
 
             R(phi) = sin(phi)/(1 - a(phi))
                      - cos(phi)/(lambda_r * (1 + a'(phi)))
 
-        where lambda_r = omega r / V_inf and a(phi), a'(phi) come from the SAME
-        corrections used by the Picard path (axial_induction / tangential_-
-        induction, the F1 drag toggle, and the history-free smooth_blend high-
-        thrust model). Because R changes sign across the windmill bracket
-        (0, pi/2), Brent's method converges to the root unconditionally once a
-        sign-changing sub-interval is located -- this is what makes it robust on
-        heavily loaded sections where Picard oscillates or stalls.
+        with lambda_r = omega r / V_inf and a(phi), a'(phi) coming from the same
+        corrections the Picard path uses (axial/tangential induction, the drag
+        toggle, the history free smooth_blend high thrust model). R changes sign
+        across the windmill bracket (0, pi/2), so Brent finds the root every time
+        once it has a sign changing sub interval. that is why it holds up on the
+        heavily loaded sections where Picard oscillates or gets stuck.
 
-        Returns (a, a_prime, converged, corr_info, history) matching the tuple
-        the Picard branch feeds into the shared force-recompute block.
+        returns (a, a_prime, converged, corr_info, history), same tuple the
+        Picard branch feeds into the shared force recompute.
         """
         from scipy.optimize import brentq
 
@@ -379,7 +367,7 @@ class BEMSolver:
             Cl, Cd = self.aero.get_blended_coefficients(
                 r, np.degrees(alpha), section_idx=section_idx, Re=Re)
             Ct = self.corrections.tangential_force_coefficient(Cl, Cd, phi)
-            # F1: drag excluded from the induction Cn when configured.
+            # drop drag from the induction Cn if that is how it was set up
             if self.corrections.drag_in_induction:
                 Cn_ind = self.corrections.normal_force_coefficient(Cl, Cd, phi)
             else:
@@ -390,10 +378,10 @@ class BEMSolver:
             return a, a_prime, Cl, Cd
 
         def _inductions(phi):
-            # First pass at Re=None (identical to pre-F6 when single-Re).
+            # first pass at Re=None
             a, a_prime, Cl, Cd = _inductions_at(phi, None)
-            # F6: self-consistent one-step Reynolds correction. Skipped entirely
-            # (and thus bit-for-bit identical) unless multi-Re polars are loaded.
+            # one extra self consistent Reynolds step. skipped completely unless
+            # multi Re polars are loaded.
             if getattr(self.aero, "reynolds_dependent", False):
                 W = np.hypot(V_inf * (1.0 - a), omega * r * (1.0 + a_prime))
                 Re = self.aero.local_reynolds(W, chord)
@@ -409,16 +397,14 @@ class BEMSolver:
                 return np.sin(phi) - np.cos(phi)
             return np.sin(phi) / (1.0 - a) - np.cos(phi) / denom_t
 
-        # Windmill bracket (0, pi/2): scan for sign changes and take the root at
-        # the HIGHEST phi. Rationale (verified against Picard on the operating
-        # grid): R(phi) can pick up spurious low-phi sign changes because near
-        # the root the local AoA alpha = phi - twist - pitch goes deeply
-        # negative, where the blended polars swing Cl erratically and slam a
-        # against its +/-clamps. Those crossings are airfoil-table artifacts, not
-        # physical operating points. The physical windmill solution is always the
-        # highest-phi crossing -- there alpha sits in the normal operating range
-        # and a is small and smooth. Equivalently: descend from phi=pi/2 (where
-        # R>0 since sin/(1-a) dominates) and Brent the first sign change found.
+        # windmill bracket (0, pi/2): scan for sign changes and take the root at
+        # the HIGHEST phi. why the highest one: near the root alpha = phi - twist
+        # - pitch goes very negative, and there the blended polars throw Cl
+        # around and slam a into its clamps, which makes fake low phi crossings.
+        # those are just airfoil table artifacts, not real operating points. the
+        # real windmill solution is always the highest phi crossing, where alpha
+        # is in the normal range and a is small and smooth. so basically i go
+        # down from phi=pi/2 (R>0 there) and Brent the first sign change i hit.
         phi_lo, phi_hi = 1e-6, np.pi / 2.0 - 1e-6
         n_scan = 60
         phis = np.linspace(phi_lo, phi_hi, n_scan)
@@ -525,9 +511,9 @@ class BEMSolver:
             "delta_Ct_trapz_minus_primary": Ct_trapz - CT_rotor,
         }
 
-        # Rotor-level convergence / consistency report (F19). Purely diagnostic:
-        # it summarises the already-computed per-section state and does NOT feed
-        # back into any integrated quantity above.
+        # rotor level convergence report. just diagnostics, it sums up the per
+        # section state we already have and does not feed back into anything
+        # integrated above.
         n_sec = len(results)
         sec_conv = np.array(
             [bool(s.get("converged", False)) for s in results], dtype=bool)

@@ -4,22 +4,22 @@ import pandas as pd
 
 class ViternaExtrapolator:
     """
-    360° polar extrapolation using the Viterna-Corrigan (1982) method.
+    360 degree polar extrapolation with the Viterna-Corrigan (1982) method.
 
-    Key implementation notes
-    ------------------------
-    The Viterna equations are only valid for α ∈ [α_stall, 90°].
-    Beyond 90° the standard practice (NREL AeroDyn, OpenFAST) is:
+    a couple of implementation notes:
 
-        Cl(α) = -Cl(180° - α)          (antisymmetric about 90°)
-        Cd(α) =  Cd(180° - α)          (symmetric about 90°)
+    the Viterna equations are only valid for alpha in [alpha_stall, 90 deg].
+    past 90 deg the usual practice (NREL AeroDyn, OpenFAST) is:
 
-    This avoids the B2·cos(α) term producing negative Cd near 0° and ±180°,
+        Cl(a) = -Cl(180 - a)          (antisymmetric about 90)
+        Cd(a) =  Cd(180 - a)          (symmetric about 90)
+
+    that way the B2*cos(a) term does not give negative Cd near 0 and +/-180,
     which happens whenever cd_stall is small (thin airfoils at low Re).
 
-    The negative-α side is handled by the same equations applied to |α|
-    and then sign-flipping Cl, so the polar is always antisymmetric in Cl
-    and symmetric in Cd as physics requires.
+    the negative alpha side is the same equations on |alpha| with Cl sign
+    flipped, so the polar stays antisymmetric in Cl and symmetric in Cd like the
+    physics wants.
     """
 
     def __init__(self, geometry=None, cd90=None, AR=None, step_deg=1.0):
@@ -67,32 +67,28 @@ class ViternaExtrapolator:
 
     def find_stall_angles(self, polar_df):
         """
-        Detect positive and negative stall angles from the measured polar.
+        Detect the positive and negative stall angles from the measured polar.
 
-        Strategy
-        --------
-        The stall angle is defined as the angle of MAXIMUM Cl (positive side)
-        or MINIMUM Cl (negative side) in the measured data.  This is correct
-        by definition and immune to mid-range Cl inflections (e.g. the laminar
-        bubble kink in S-series airfoils such as S822/S823 around α≈5-7°).
+        the stall angle is just the angle of MAX Cl (positive side) or MIN Cl
+        (negative side) in the measured data. that is correct by definition and
+        does not get fooled by mid range Cl inflections (like the laminar bubble
+        kink in the S series airfoils such as S822/S823 around alpha 5 to 7 deg).
 
-        The previous gradient-based detector (first dCl/dα zero-crossing) fired
-        on those inflections, anchoring Viterna at α≈6° instead of the true
-        stall at α≈17°.  This caused the BEM polar to depart from the raw data
-        for the entire α=[6°, 17°] range, producing a ~35% underestimate of Cl
-        in sections operating in that range.
+        an earlier gradient based detector (first dCl/dalpha zero crossing) used
+        to fire on those inflections and anchor Viterna at alpha ~6 deg instead
+        of the real stall around alpha ~17 deg. that made the BEM polar drift off
+        the raw data over the whole alpha = 6 to 17 deg range, about a 35% under
+        estimate of Cl for the sections working in that range.
 
-        Manual override
-        ---------------
-        If the polar DataFrame carries attributes 'alpha_stall_pos' or
+        manual override: if the polar DataFrame carries attributes
+        'alpha_stall_pos' or
         'alpha_stall_neg', those values are used directly (useful for debugging
         or for polars where the automatic detection is still wrong).
 
-        Non-lifting airfoils
-        --------------------
-        For cylinders/non-lifting sections (|Cl|_max < 0.05), returns ±15°
-        as nominal stall angles to give Viterna a physically reasonable
-        flat-plate extension without divide-by-zero warnings.
+        non lifting airfoils: for cylinders / non lifting sections
+        (|Cl|_max < 0.05) it returns +/-15 deg as nominal stall angles, so
+        Viterna gets a sensible flat plate extension without divide by zero
+        warnings.
         """
         alpha = polar_df["alpha"].values
         cl    = polar_df["cl"].values
@@ -137,7 +133,7 @@ class ViternaExtrapolator:
         return alpha_stall_pos, alpha_stall_neg
 
     # --------------------------------------------------
-    # Viterna constants  (valid for α ∈ [α_stall, 90°])
+    # Viterna constants  (valid for alpha in [alpha_stall, 90 deg])
     # --------------------------------------------------
 
     def viterna_constants(self, alpha_stall_deg, cl_stall, cd_stall):
@@ -164,12 +160,12 @@ class ViternaExtrapolator:
         return A1, A2, B1, B2
 
     # --------------------------------------------------
-    # Viterna equations  (α ∈ [α_stall, 90°])
+    # Viterna equations  (alpha in [alpha_stall, 90 deg])
     # --------------------------------------------------
 
     def _viterna_cl_cd(self, alpha_rad, A1, A2, B1, B2):
         """
-        Evaluate Viterna Cl and Cd.  alpha_rad must be in [α_stall, π/2].
+        Evaluate Viterna Cl and Cd. alpha_rad must be in [alpha_stall, pi/2].
         """
         sin_a = np.sin(alpha_rad)
         cos_a = np.cos(alpha_rad)
@@ -182,30 +178,29 @@ class ViternaExtrapolator:
         return cl, cd
 
     # --------------------------------------------------
-    # Full positive-side polar  (α_stall → 180°)
+    # full positive side polar  (alpha_stall to 180 deg)
     # --------------------------------------------------
 
     def _positive_side(self, alpha_deg, a_s, cl_s, cd_s, A1, A2, B1, B2):
         """
-        Return (Cl, Cd) for alpha_deg ∈ [a_s, 180°] on the positive side.
+        Return (Cl, Cd) for alpha_deg in [a_s, 180 deg] on the positive side.
 
-        Regions
-        -------
-        [a_s,  90°]           Viterna directly
-        [90°,  180°-a_s]      Mirror:  Cl(α) = -Cl(180°-α),  Cd(α) = Cd(180°-α)
-        [180°-a_s, 180°]      Blend Cl → 0, Cd → 0  (edge-on flat plate)
+        the three regions:
+        [a_s,  90]           Viterna directly
+        [90,  180-a_s]       mirror:  Cl(a) = -Cl(180-a),  Cd(a) = Cd(180-a)
+        [180-a_s, 180]       blend Cl and Cd down to 0 (edge on flat plate)
         """
         if alpha_deg <= 90.0:
             return self._viterna_cl_cd(np.radians(alpha_deg), A1, A2, B1, B2)
 
-        # Mirror angle
-        alpha_m = 180.0 - alpha_deg          # ∈ [0°, 90°]
+        # mirror angle, ends up in [0, 90]
+        alpha_m = 180.0 - alpha_deg
 
         if alpha_m >= a_s:
             cl_m, cd_m = self._viterna_cl_cd(np.radians(alpha_m), A1, A2, B1, B2)
         else:
-            # Blend from Viterna anchor at α_stall → flat-plate at 0°
-            # t=0 when mirror=α_stall (full Viterna), t=1 when mirror=0° (full flat-plate)
+            # blend from the Viterna anchor at alpha_stall to flat plate at 0 deg.
+            # t=0 when mirror=alpha_stall (full Viterna), t=1 when mirror=0 (flat plate)
             t = 1.0 - (alpha_m / a_s) if a_s > 0 else 1.0
             w = 0.5 * (1.0 - np.cos(np.pi * np.clip(t, 0.0, 1.0)))
         
@@ -220,8 +215,8 @@ class ViternaExtrapolator:
         cl = -cl_m
         cd =  cd_m
 
-        # Blend Cl and Cd toward (0, 0) very close to 180°
-        # (at exactly 180° the airfoil is edge-on, Cl=0, Cd≈0)
+        # blend Cl and Cd toward (0, 0) very close to 180 deg
+        # (at exactly 180 deg the airfoil is edge on, Cl=0, Cd about 0)
         EDGE_WIDTH = 15.0
         if alpha_deg > 180.0 - EDGE_WIDTH:
             w   = (alpha_deg - (180.0 - EDGE_WIDTH)) / EDGE_WIDTH
@@ -250,7 +245,7 @@ class ViternaExtrapolator:
 
     def extrapolate(self, polar_df):
         """
-        Return a 360° polar DataFrame (columns: alpha, cl, cd).
+        Return a 360 deg polar DataFrame (columns: alpha, cl, cd).
         """
         polar_df   = polar_df.sort_values(by="alpha").reset_index(drop=True)
         alpha_data = polar_df["alpha"].values
@@ -268,14 +263,14 @@ class ViternaExtrapolator:
         cl_sn = float(np.interp(alpha_stall_neg, alpha_data, cl_data))
         cd_sn = float(np.interp(alpha_stall_neg, alpha_data, cd_data))
 
-        # Viterna constants — positive side uses positive stall values;
-        # negative side mirrors, so we pass abs(cl_sn) and same cd_sn.
+        # Viterna constants. positive side uses the positive stall values, the
+        # negative side mirrors so we pass abs(cl_sn) and the same cd_sn.
         A1p, A2p, B1p, B2p = self.viterna_constants(a_s_pos,  cl_sp,  cd_sp)
         A1n, A2n, B1n, B2n = self.viterna_constants(a_s_neg, -cl_sn,  cd_sn)
 
-        BLEND_DEG = 0.5   # cosine blend width at stall boundary (was 3.0 —
-                          # a 3° window starts corrupting the polar at
-                          # alpha_stall - 3°, well before the actual stall)
+        BLEND_DEG = 0.5   # cosine blend width at the stall boundary. it was 3.0
+                          # but a 3 deg window starts messing up the polar at
+                          # alpha_stall - 3 deg, well before the real stall.
 
         alpha_full = np.arange(-180.0, 180.0 + self.step_deg, self.step_deg)
         cl_full    = np.zeros_like(alpha_full)

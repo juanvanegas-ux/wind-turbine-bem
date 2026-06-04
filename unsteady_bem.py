@@ -1,7 +1,7 @@
 """
 Unsteady BEM driver for time-domain aerodynamic simulations.
 
-Wraps a quasi-steady BEMSolver and optionally adds Øye dynamic inflow.
+Wraps a quasi steady BEMSolver and optionally adds Oye dynamic inflow.
 This is the module to use when coupling the aerodynamic model to a
 time-domain simulator (e.g. Modelica via FMU, or a Python ODE driver).
 
@@ -12,13 +12,13 @@ Usage (Python-only):
         out = aero_engine.step(V, omega, np.radians(pitch_deg), dt)
         # out["power"], out["torque"], out["thrust"], etc.
 
-Two modes:
-    dynamic=False  → quasi-steady: BEM is solved at every call,
-                     identical to MAIN_performance behaviour.
-    dynamic=True   → Øye 2-pole filter on axial induction.  BEM is still
-                     used to find the *quasi-steady* induction at each
-                     step, then the dynamic state is integrated.
-                     Forces are recomputed from the lagged induction.
+two modes:
+    dynamic=False  quasi steady: BEM solved at every call, same as the
+                   MAIN_performance behaviour.
+    dynamic=True   Oye 2 pole filter on the axial induction. BEM is still used
+                   to get the quasi steady induction at each step, then the
+                   dynamic state is integrated and the forces recomputed from
+                   the lagged induction.
 """
 
 import numpy as np
@@ -33,8 +33,8 @@ class UnsteadyBEM:
 
     Parameters
     ----------
-    solver  : BEMSolver  — pre-built quasi-steady solver
-    dynamic : bool       — enable Øye dynamic inflow filter
+    solver  : BEMSolver  pre built quasi steady solver
+    dynamic : bool       turn on the Oye dynamic inflow filter
     """
 
     def __init__(self, solver, dynamic=True):
@@ -96,8 +96,8 @@ class UnsteadyBEM:
         a_prime    = np.array([s["a_prime"] for s in qs["sections"]])
 
         if self.dynamic:
-            # Lag the axial induction with the Øye filter.  Tangential
-            # induction is kept quasi-steady (its time constant is short).
+            # lag the axial induction with the Oye filter. tangential induction
+            # stays quasi steady (its time constant is short).
             a_dyn = self.di.step(a_qs, self.r_arr, V_inf, dt)
         else:
             a_dyn = a_qs
@@ -147,7 +147,7 @@ class UnsteadyBEM:
                           qs_sections):
         """
         Given dynamic induction a_dyn (and quasi-steady a'), recompute
-        section forces in one pass — no fixed-point iteration.
+        section forces in one pass, no fixed point iteration.
 
         We re-evaluate phi, alpha, Cl, Cd from the (possibly lagged) a
         rather than reusing the converged QS values, since the lagged a

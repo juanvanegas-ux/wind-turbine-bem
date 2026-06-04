@@ -27,7 +27,7 @@ class RotationalCorrection:
     Lambda = tip speed ratio = omega*R / sqrt(V_inf^2 + (omega*R)^2)
 
     Only applied where Cl_linear > Cl_2d (post-stall region).
-    Effect scales with c/r — strongest at root, zero at tip.
+    effect scales with c/r, so strongest at the root and zero at the tip.
     """
 
     def __init__(
@@ -77,7 +77,7 @@ class RotationalCorrection:
         Canonical Equation 20 from Du & Selig (1998), as cited in the AeroDyn
         and QBlade theory manuals:
 
-            fL = 1/(2π) * [ (1.6*(c/r) / 0.1267)
+            fL = 1/(2*pi) * [ (1.6*(c/r) / 0.1267)
                             * (a - (c/r)^exp) / (b + (c/r)^exp)
                             - 1 ]
 
@@ -93,10 +93,10 @@ class RotationalCorrection:
           fL naturally goes negative toward the tip (small c/r), where the
           correction should vanish.
 
-        History: a previous implementation used den = (b - cr^exp), cancelled
-        the numerator, dropped the trailing -1, and carried a stray factor of
-        π. That form over-predicted fL by ~7x at c/r = 0.15. Fixed (F2) to the
-        canonical Eq. 20 above.
+        note to self: an earlier version of this used den = (b - cr^exp),
+        cancelled the numerator, dropped the trailing -1, and had a stray factor
+        of pi. that one over predicted fL by about 7x at c/r = 0.15. now it is
+        the canonical Eq. 20 above.
         """
         cr = self.cr
         a  = self.a
@@ -108,10 +108,10 @@ class RotationalCorrection:
         # Exponent: d * R / (Λ * r) = d * (R/r) / Λ
         exponent = d * Rr / max(L, 1e-6)
 
-        # cr^exponent — protect against overflow
+        # cr^exponent, capped so it cant overflow
         cr_exp = cr ** min(exponent, 50.0)
 
-        # fL — Du-Selig (1998) Eq. 20 (canonical form)
+        # fL, Du-Selig (1998) Eq. 20 (canonical form)
         den_L = b + cr_exp
         if abs(den_L) < 1e-10:
             fL = 0.0
@@ -135,11 +135,11 @@ class RotationalCorrection:
         delta_cl_max=0.3,
     ):
         """
-        Apply correction to a 360° polar DataFrame.
-        Returns a new DataFrame with corrected cl and cd.
+        Apply the correction to a 360 deg polar DataFrame.
+        returns a new DataFrame with corrected cl and cd.
 
-        For validation use, callers should pass measured-range polar data only,
-        then extrapolate afterward if a 360-degree polar is required.
+        ideally pass measured range polar data only, then extrapolate afterwards
+        if you need a full 360 degree polar.
 
         Only modifies angles where Cl_linear > Cl_2d (post-stall).
         Inside the attached flow region the correction is zero by construction.
@@ -150,7 +150,7 @@ class RotationalCorrection:
             Minimum angle of attack [deg] affected by the correction.
         alpha_max_deg : float
             Maximum angle of attack [deg] beyond which the correction is
-            not applied. Default 30°. Above this angle the 2D flat-plate
+            not applied. Default 30. above this angle the 2D flat plate
             model already captures separated flow adequately and the
             3D rotational effect saturates.
         delta_cl_max  : float

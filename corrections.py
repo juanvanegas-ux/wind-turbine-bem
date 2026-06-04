@@ -114,11 +114,11 @@ class BEMCorrections:
         self.buhl_transition_model = buhl_transition_model
         self.buhl_deactivation_count_required = buhl_deactivation_count_required
 
-        # F1: whether profile drag enters the *axial-induction* momentum
-        # balance. AeroDyn / WT_Perf exclude drag from the induction balance
-        # by default (drag still enters the blade loads). True reproduces this
-        # solver's historical convention (drag included); False matches the
-        # AeroDyn/WT_Perf default. Loads (dFn) always include drag regardless.
+        # whether profile drag goes into the axial induction momentum balance.
+        # AeroDyn and WT_Perf leave drag out of the induction balance by default
+        # (drag still shows up in the blade loads). True keeps drag in, False
+        # matches the AeroDyn/WT_Perf default. either way the loads (dFn) always
+        # carry drag.
         self.drag_in_induction = drag_in_induction
 
         if high_induction_model not in ("buhl", "reference_glauert"):
@@ -330,15 +330,14 @@ class BEMCorrections:
 
         inside_sqrt = CT_local * (50.0 - 36.0 * F) + 12.0 * F * (3.0 * F - 4.0)
 
-        # Invariant: whenever this correction is the *selected* high-thrust
-        # branch (CT_local > 0.96*F) the radicand is provably positive — at the
-        # activation threshold CT_local = 0.96*F it equals 1.44*F**2 and it
-        # grows with CT_local for F < 1.39. So the clip below is only ever
-        # reached for evaluations whose result is discarded (momentum branch
-        # wins) or carries a small smooth_blend weight near CT/F = 0.93, where
-        # the clamped value stays finite and continuous. It is therefore a
-        # defensive guard, not a sign of an invalid solution; do not promote it
-        # to a physical-validity failure.
+        # when this is actually the selected high thrust branch (CT_local >
+        # 0.96*F) the thing under the sqrt is always positive. at the activation
+        # threshold CT_local = 0.96*F it is 1.44*F**2 and it grows with CT_local
+        # for F < 1.39. so the clip below only ever fires for evaluations whose
+        # result gets thrown away (momentum branch wins) or carries a tiny
+        # smooth_blend weight near CT/F = 0.93, where the clamped value is still
+        # finite and continuous. it is just a safety guard, not a real invalid
+        # solution, so dont treat it as a physical validity failure.
         if inside_sqrt < 0:
             inside_sqrt = 0.0
 
@@ -447,17 +446,17 @@ class BEMCorrections:
         # ---- Buhl path (default) ----------------------------------------
         a_momentum = self.axial_induction_momentum(sigma, Cn, phi, F)
 
-        # BUG FIX (CT_local axial factor) — the blade-element thrust coefficient
-        # driving the high-thrust (Glauert/Buhl) criterion and the Buhl inverse
-        # is CT = sigma*(1-a)^2*Cn/sin^2(phi). The Glauert breakpoint CT = 0.96*F
-        # corresponds to a = 0.4 ONLY for this (1-a)^2 form; the bare
-        # sigma*Cn/sin^2(phi) (== CT/(1-a)^2 == 4aF/(1-a) in the momentum region)
-        # trips the high-thrust branch at a ~ 0.19, forcing healthy outboard
-        # sections onto the Buhl branch and running a -> a_max (dead torque, low
-        # Cp). Restore the (1-a)^2 factor using the current induction estimate:
-        # the previous Picard iterate when supplied, else the momentum solution
-        # (Ning / first call). At a_ref = a_momentum = 0.4 this gives CT = 0.96*F
-        # exactly, so the criterion is continuous across the breakpoint.
+        # careful with the axial factor here. the blade element thrust
+        # coefficient that drives the high thrust (Glauert/Buhl) test and the
+        # Buhl inverse is CT = sigma*(1-a)^2*Cn/sin^2(phi). the Glauert breakpoint
+        # CT = 0.96*F sits at a = 0.4 only with this (1-a)^2 form. if you use the
+        # bare sigma*Cn/sin^2(phi) (== CT/(1-a)^2 == 4aF/(1-a) in the momentum
+        # region) the high thrust branch trips at a ~ 0.19, which drags healthy
+        # outboard sections onto the Buhl branch and runs a -> a_max (no torque,
+        # low Cp). so put the (1-a)^2 factor back using the current induction
+        # estimate: the previous Picard iterate if we have one, else the momentum
+        # solution (Ning / first call). at a_ref = a_momentum = 0.4 this gives
+        # CT = 0.96*F exactly so the test stays continuous across the breakpoint.
         a_ref = a_momentum if a_prev is None else a_prev
         a_ref = min(max(float(a_ref), 0.0), 0.999)
         axial_factor = (1.0 - a_ref) ** 2
@@ -556,27 +555,24 @@ class BEMCorrections:
 
             a' = (sigma Ct) / (4 F sin(phi) cos(phi) - sigma Ct)
 
-        Ct here is the tangential force coefficient, not thrust coefficient.
+        Ct here is the tangential force coefficient, not the thrust coefficient.
 
-        Why the single-denominator form (F5)
-        ------------------------------------
-        The original nested form divided by ``sigma*Ct`` first and by
-        ``(D - 1)`` second, and returned 0.0 at each near-zero denominator. The
-        second reset is a *discontinuity* exactly at the swirl pole
-        ``4 F sinphi cosphi = sigma Ct``: approaching the pole the true a' grows
-        toward the +/- clamp, but the old code collapsed it to 0 right at the
-        crossing, so across the pole a' went +/-0.5 -> 0 -> -/+0.5 over
-        iterations. That sign-flipping reset is a local oscillation source.
+        why i write it as one denominator: the nested form divided by sigma*Ct
+        first and by (D - 1) second, and returned 0.0 at each near zero
+        denominator. that second reset is a discontinuity right at the swirl pole
+        4 F sinphi cosphi = sigma Ct. near the pole the true a' grows toward the
+        +/- clamp, but the old code dropped it to 0 right at the crossing, so a'
+        went +/-0.5 -> 0 -> -/+0.5 across iterations. that sign flip is a nice
+        little source of oscillation.
 
-        The single-denominator form fixes both issues:
-        - ``sigma*Ct -> 0`` now yields ``a' -> 0`` naturally (numerator -> 0),
-          so no special case and no inner blow-up.
-        - The swirl pole is handled by ONE sign-aware floor on the single
-          denominator, so a' saturates smoothly toward the clamp on the correct
+        the single denominator form fixes both:
+        - sigma*Ct -> 0 now gives a' -> 0 on its own (numerator -> 0), no special
+          case and no inner blow up.
+        - the swirl pole is handled by one sign aware floor on the single
+          denominator, so a' saturates smoothly toward the clamp on the right
           side of the pole instead of snapping to 0.
 
-        In the well-behaved regime (denominator comfortably away from 0) this is
-        bit-for-bit identical to the original expression.
+        away from the pole this gives the same number as the original.
         """
 
         sin_phi = np.sin(phi)
@@ -585,10 +581,10 @@ class BEMCorrections:
         num = sigma * Ct
         den = 4.0 * F * sin_phi * cos_phi - num
 
-        # Sign-aware floor: keep |den| away from zero WITHOUT flipping its sign.
-        # This replaces the old discontinuous "-> 0 at the pole" reset, removing
-        # the +inf/-inf sign flip that drove inboard oscillation (F5). The final
-        # magnitude is bounded by limit_tangential_induction (the +/-0.5 clamp).
+        # sign aware floor: keep |den| off zero without flipping its sign. this
+        # replaces the old "-> 0 at the pole" reset and kills the +inf/-inf sign
+        # flip that caused the inboard oscillation. the final magnitude is
+        # bounded by limit_tangential_induction anyway (the +/-0.5 clamp).
         eps = 1e-12
         if abs(den) < eps:
             den = eps if den >= 0.0 else -eps
@@ -638,14 +634,13 @@ class BEMCorrections:
         """
         Clamp tangential induction to avoid numerical explosion.
 
-        Bounds are ``a_prime_min``/``a_prime_max`` (default +/-0.5). These both
-        protect against the swirl pole (see ``tangential_induction``) and cap
-        physical swirl (F4). At very low TSR / far-inboard sections physical a'
-        can approach or exceed 0.5, so the default clamp can bias inboard
-        torque; callers that need wider inboard swirl may widen the bounds via
-        the ``a_prime_min``/``a_prime_max`` constructor arguments. The default
-        is left at +/-0.5 (the validated value) because widening it trades
-        inboard-torque headroom for reduced protection near the pole.
+        bounds are a_prime_min / a_prime_max (default +/-0.5). they both keep us
+        off the swirl pole (see tangential_induction) and cap the physical swirl.
+        at very low TSR / far inboard sections the real a' can get to or past 0.5,
+        so the default clamp can bias the inboard torque a bit. if you need more
+        inboard swirl just widen the bounds in the constructor. i leave it at
+        +/-0.5 because going wider trades inboard torque headroom for less
+        protection near the pole.
         """
 
         if np.isnan(a_prime) or np.isinf(a_prime):
@@ -720,10 +715,10 @@ class BEMCorrections:
         sigma = self.local_solidity(self.B, chord, r)
         F = self.prandtl_loss_factor(r, phi)
 
-        # F1: the value driving the axial-induction balance. When
-        # drag_in_induction is False, drag is dropped from the induction Cn
-        # (Cn_ind = Cl*cos(phi)) to match the AeroDyn/WT_Perf convention; the
-        # reported Cn and the blade loads (dFn, in BEM.py) keep full drag.
+        # this is the value that drives the axial induction balance. with
+        # drag_in_induction False we drop drag from the induction Cn
+        # (Cn_ind = Cl*cos(phi)) to match the AeroDyn/WT_Perf convention. the
+        # reported Cn and the blade loads (dFn, over in BEM.py) keep full drag.
         if self.drag_in_induction:
             Cn_ind = Cn
         else:
